@@ -104,6 +104,28 @@
     display:inline-block;animation:sp 0.8s linear infinite;vertical-align:-3px;margin-right:8px}
   @keyframes sp{to{transform:rotate(360deg)}}
 
+  /* ---- Home: featured carousel + album cards (real library art only) ---- */
+  .carousel{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 2px 12px;scrollbar-width:none}
+  .carousel::-webkit-scrollbar,.albumsrow::-webkit-scrollbar{display:none}
+  .fcard{flex:0 0 84%;max-width:540px;min-height:216px;scroll-snap-align:start;border-radius:20px;overflow:hidden;
+    position:relative;cursor:pointer;background:#0d2c49;border:1px solid var(--line)}
+  .fcard img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .fcard .shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(4,18,32,.05) 38%,rgba(4,18,32,.85))}
+  .fcard .cap{position:absolute;left:16px;right:16px;bottom:14px}
+  .fcard .cap .t{font-size:21px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .fcard .cap .a{font-size:14px;color:#dceefb;white-space:normal}
+  .listen{display:inline-block;margin-top:9px;background:var(--gold);color:#231a02;font-weight:700;font-size:13.5px;
+    padding:7px 14px;border-radius:999px}
+  .albumsrow{display:flex;gap:12px;overflow-x:auto;padding:4px 2px 12px;scrollbar-width:none}
+  .acard{flex:0 0 132px;cursor:pointer}
+  .acard img{width:132px;height:132px;border-radius:16px;object-fit:cover;background:#0d2c49;border:1px solid var(--line);display:block}
+  .acard .ct{font-size:14.5px;font-weight:600;line-height:1.25;margin-top:7px;display:-webkit-box;-webkit-line-clamp:2;
+    -webkit-box-orient:vertical;overflow:hidden}
+  .acard .ca{font-size:12.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .acard .cnt{font-size:11.5px;color:var(--dim);margin-top:1px}
+  .fcard,.acard{touch-action:manipulation;user-select:none;-webkit-user-select:none;transition:transform .13s ease,filter .13s ease}
+  .fcard:active,.acard:active{transform:scale(.97);filter:brightness(1.12)}
+
   /* ---- Touch responsiveness (owner spec): native states, no sticking ---- */
   *{-webkit-tap-highlight-color:transparent}
   button,.chip,.tab,.track{touch-action:manipulation;user-select:none;-webkit-user-select:none}
@@ -166,9 +188,22 @@
   <div class="rowlabel">Singers</div>
   <div class="chips" id="chips"></div>
 
+  <div class="rowlabel">Browse</div>
+  <div class="chips" id="cats"></div>
+
+  <div id="home">
+    <div class="rowlabel">Featured Albums</div>
+    <div class="carousel" id="carousel"></div>
+    <div id="albumsSec">
+      <div class="rowlabel">Albums</div>
+      <div class="albumsrow" id="albumsRow"></div>
+    </div>
+  </div>
+
   <div class="rowlabel">Mood folders</div>
   <div class="tabs" id="tabs"></div>
 
+  <div class="rowlabel" id="listLabel">Singles &amp; Tracks</div>
   <div class="list" id="list"></div>
 
   <div class="settings">
@@ -240,6 +275,10 @@ let bookmarks = store.get("bookmarks", []);           // array of track objects
 let allTracks = [];                                    // current search result set
 let folder = "all";                                    // all|relaxed|mid|upbeat|fast|bookmarks
 let currentKey = null, shuffle = false, errStreak = 0;
+/* Home state: "home" shows the featured carousel + albums + the default
+   list; "list" is the plain track list (search / singer / category / album). */
+let view = "home", activeCat = "all", listTitle = "Singles & Tracks", bootDone = false;
+let homeTracks = [], homeAlbums = [], defaultTracks = [];
 const audio = $("#audio");
 
 function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
@@ -264,6 +303,35 @@ function visibleTracks(){
   return allTracks.filter(t => folderOf(t) === folder);
 }
 
+/* ---------- Albums: group a track set by (album, artist) ---------- */
+function groupAlbums(tracks){
+  const map = new Map();
+  tracks.forEach(t => {
+    const key = JSON.stringify([t.album || "", t.artist || ""]);
+    let a = map.get(key);
+    if(!a){ a = { title: t.album || "Untitled", artist: t.artist || "", cover: null, thumb: null, date: null, tracks: [] }; map.set(key, a); }
+    if(!a.cover && t.cover) a.cover = t.cover;
+    if(!a.thumb && t.artwork) a.thumb = t.artwork;
+    if(t.date && (!a.date || String(t.date) > String(a.date))) a.date = t.date;
+    a.tracks.push(t);
+  });
+  return [...map.values()];
+}
+function byFreshness(a, b){
+  return String(b.date || "").localeCompare(String(a.date || "")) || b.tracks.length - a.tracks.length;
+}
+function albumsByFreshness(tracks){
+  return groupAlbums(tracks).sort(byFreshness).flatMap(a => a.tracks);
+}
+/* Card art: the album's own cover file first, then the IA item thumbnail,
+   then the neutral placeholder — never a stock photo. */
+function setCoverImg(img, a){
+  const chain = [...new Set([a.cover, a.thumb, PLACEHOLDER].filter(Boolean))];
+  let i = 0;
+  img.onerror = () => { i++; if(i < chain.length) img.src = chain[i]; else img.onerror = null; };
+  img.src = chain[0];
+}
+
 /* ---------- Internet Archive ---------- */
 function iaFileTitle(f, itemTitle){
   let n = (f.title || f.name || "").replace(/\.(mp3|flac|ogg|m4a)$/i,"").trim();
@@ -286,6 +354,11 @@ async function iaSearch(query){
       const mr = await fetch(`${IA}/metadata/${encodeURIComponent(doc.identifier)}`);
       if(!mr.ok) return;
       const md = await mr.json();
+      // Album cover: the item's own first image file (never a stock photo);
+      // null when the item has none — cards fall back to the IA thumbnail.
+      const imgFile = (md.files || []).find(f => /\.(jpe?g|png)$/i.test(f.name) && f.source !== "metadata" && !/^__ia_thumb/i.test(f.name));
+      const itemCover = imgFile ? `${IA}/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(imgFile.name)}` : null;
+      const itemDate = (md.metadata && (md.metadata.publicdate || md.metadata.date)) || null;
       const files = (md.files || []).filter(f => /\.(mp3|flac|ogg)$/i.test(f.name) && f.source !== "metadata");
       const itemArtist = (md.metadata && md.metadata.creator) || doc.creator || null;
       const album = String((md.metadata && md.metadata.title) || doc.title || doc.identifier);
@@ -304,7 +377,7 @@ async function iaSearch(query){
           key: "ia:" + doc.identifier + ":" + f.name,
           source: "ia", sourceLabel: "Internet Archive",
           title, artist: String(f.artist || f.creator || itemArtist || "Unknown artist"), album,
-          duration, bpm: null,
+          duration, bpm: null, cover: itemCover, date: itemDate,
           artwork: `${IA}/services/img/${encodeURIComponent(doc.identifier)}`,
           stream: `${IA}/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(f.name)}`,
           _tn: isFinite(tn) ? tn : (lead ? parseInt(lead[1], 10) : Number.MAX_SAFE_INTEGER)
@@ -343,6 +416,8 @@ async function audiusSearch(query){
     artist: (t.user && t.user.name) || "Unknown artist",
     album: (t.playlist_name) || (t.genre ? t.genre + " · Audius" : "Audius"),
     duration: t.duration || null, bpm: null,
+    cover: (t.artwork && (t.artwork["480x480"] || t.artwork["150x150"])) || null,
+    date: t.release_date || null,
     artwork: (t.artwork && (t.artwork["480x480"] || t.artwork["150x150"])) || null,
     stream: `${AUDIUS}/v1/tracks/${t.id}/stream`
   }));
@@ -350,8 +425,11 @@ async function audiusSearch(query){
 
 /* ---------- Search ---------- */
 let searchSeq = 0;
-async function runSearch(query){
+async function runSearch(query, opts = {}){
   const my = ++searchSeq;
+  view = "list"; applyView();
+  if(!opts.keepCat){ activeCat = null; renderCats(); }
+  listTitle = opts.title || ("Results · " + query); renderListTitle();
   const list = $("#list");
   list.innerHTML = `<div class="empty"><span class="spin"></span>Searching the free libraries for “${esc(query)}”…</div>`;
   let ia = [], au = [], errs = [];
@@ -395,6 +473,95 @@ function renderChips(){
     $("#q").value = n; runSearch(n);
   });
   c.appendChild(add);
+}
+
+/* ---------- Home: category chips, featured carousel, albums row ---------- */
+const CATS = [["all","All"],["chanukah","Chanukah Songs"],["nigunim","Chassidishe Nigunim"],["albums","New Albums"],["singles","Singles"]];
+function renderCats(){
+  const c = $("#cats"); c.innerHTML = "";
+  CATS.forEach(([id, label]) => {
+    const b = document.createElement("button");
+    b.className = "chip" + (activeCat === id ? " active" : ""); b.type = "button"; b.textContent = label;
+    b.addEventListener("click", () => runCategory(id));
+    c.appendChild(b);
+  });
+}
+function applyView(){ $("#home").style.display = view === "home" ? "" : "none"; }
+function renderListTitle(){ $("#listLabel").textContent = listTitle; }
+function renderHome(){
+  const car = $("#carousel"), row = $("#albumsRow"), sec = $("#albumsSec");
+  if(!homeAlbums.length){
+    car.innerHTML = `<div class="empty">${bootDone
+      ? "The free libraries returned no albums for these singers."
+      : '<span class="spin"></span>Loading albums from the free libraries…'}</div>`;
+    row.innerHTML = ""; sec.style.display = "none";
+    return;
+  }
+  sec.style.display = "";
+  // Featured: albums with real art first, newest (by the item's own date) first.
+  let pool = homeAlbums.filter(a => a.cover || a.thumb);
+  if(!pool.length) pool = homeAlbums.slice();
+  pool.sort(byFreshness);
+  car.innerHTML = "";
+  pool.slice(0, 8).forEach(a => {
+    const card = document.createElement("div");
+    card.className = "fcard";
+    card.innerHTML = `<img alt="" loading="lazy"><div class="shade"></div>
+      <div class="cap"><div class="t">${esc(a.title)}</div>
+      <div class="a">${esc(a.artist)} · ${a.tracks.length} track${a.tracks.length === 1 ? "" : "s"}</div>
+      <span class="listen">▶ Listen Now</span></div>`;
+    setCoverImg(card.querySelector("img"), a);
+    card.addEventListener("click", () => showAlbum(a));
+    car.appendChild(card);
+  });
+  const rowAlbums = homeAlbums.slice()
+    .sort((a, b) => b.tracks.length - a.tracks.length || a.title.toLowerCase().localeCompare(b.title.toLowerCase()))
+    .slice(0, 24);
+  row.innerHTML = "";
+  rowAlbums.forEach(a => {
+    const card = document.createElement("div");
+    card.className = "acard";
+    card.innerHTML = `<img alt="" loading="lazy">
+      <div class="ct">${esc(a.title)}</div>
+      <div class="ca">${esc(a.artist)}</div>
+      <div class="cnt">${a.tracks.length} track${a.tracks.length === 1 ? "" : "s"}</div>`;
+    setCoverImg(card.querySelector("img"), a);
+    card.addEventListener("click", () => showAlbum(a));
+    row.appendChild(card);
+  });
+}
+function showAlbum(a){
+  activeCat = null; renderCats();
+  view = "list"; applyView();
+  allTracks = a.tracks.slice(); folder = "all";
+  listTitle = a.title; renderListTitle();
+  renderTabs(); renderList();
+  $("#listLabel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function runCategory(id){
+  if(id === "all"){
+    activeCat = "all"; renderCats();
+    view = "home"; applyView();
+    allTracks = defaultTracks.slice(); folder = "all";
+    listTitle = "Singles & Tracks"; renderListTitle();
+    renderTabs(); renderList();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  activeCat = id; renderCats();
+  const label = (CATS.find(c => c[0] === id) || [])[1] || id;
+  if(id === "albums"){
+    // The libraries expose no "new releases" feed for these singers; the
+    // honest New Albums is the singers' own album tracks, newest first.
+    view = "list"; applyView();
+    allTracks = albumsByFreshness(homeTracks); folder = "all";
+    listTitle = label; renderListTitle();
+    renderTabs(); renderList();
+    if(!bootDone) toast("Albums are still loading — this fills in as the libraries answer.");
+    return;
+  }
+  const q = { chanukah: "Chanukah", nigunim: "nigun", singles: "single" }[id];
+  runSearch(q, { keepCat: true, title: label });
 }
 function renderTabs(){
   const t = $("#tabs"); t.innerHTML = "";
@@ -551,10 +718,47 @@ $("#importFile").addEventListener("change", e => {
   rd.readAsText(f);
 });
 
+/* ---------- Boot load: one combined pass over the singers ----------
+   Builds the home data (featured carousel + albums) and the default
+   Singles & Tracks list from the same fetches — no duplicate searching. */
+async function bootLoad(){
+  const mySeq = searchSeq;
+  const names = (singers.length ? singers : DEFAULT_SINGERS).slice();
+  try{
+    const per = await Promise.all(names.map(async name => {
+      const [ri, ra] = await Promise.allSettled([iaSearch(name), audiusSearch(name)]);
+      const ia = ri.status === "fulfilled" ? ri.value : [];
+      const au = ra.status === "fulfilled" ? ra.value : [];
+      const seen = new Set();
+      return ia.concat(au).filter(t => !seen.has(t.key) && seen.add(t.key));
+    }));
+    // Combined home set, deduped across singers by key and by signature.
+    const seenK = new Set(), seenS = new Set();
+    homeTracks = per.flat().filter(t => {
+      const sig = t.title.toLowerCase() + "|" + (t.duration == null ? "" : Math.round(t.duration)) + "|" + t.album.toLowerCase();
+      if(seenK.has(t.key) || seenS.has(sig)) return false;
+      seenK.add(t.key); seenS.add(sig); return true;
+    });
+    homeAlbums = groupAlbums(homeTracks);
+    const fi = names.findIndex(n => n.toLowerCase() === "avraham fried");
+    defaultTracks = (fi >= 0 ? per[fi] : (per[0] || [])).slice();
+  }catch(e){ /* home stays empty; the list shows its honest empty state */ }
+  bootDone = true;
+  renderHome();
+  // If the user already started a search, don't stomp their list.
+  if(mySeq === searchSeq && view === "home"){
+    allTracks = defaultTracks.slice(); folder = "all";
+    renderTabs(); renderList();
+    window.__mmaReady = true; // first list rendered — the intro may leave now
+  }
+  if(!homeTracks.length && mySeq === searchSeq) toast("The free libraries returned nothing for these singers right now.");
+}
+
 /* ---------- Boot ---------- */
 $("#pThumb").src = PLACEHOLDER;
-renderChips(); renderTabs();
-runSearch("Avraham Fried");
+renderChips(); renderCats(); renderTabs(); renderHome();
+$("#list").innerHTML = `<div class="empty"><span class="spin"></span>Loading songs from the free libraries…</div>`;
+bootLoad();
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 </script>
 <script>
