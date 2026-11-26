@@ -313,10 +313,20 @@ function visibleTracks(){
 function normAlbumKey(s){
   return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
 }
+function albumGroupKey(t){
+  // Merge the same album even when one copy embeds the singer's name in
+  // its title ("Fire for God - Yaakov Shwekey" vs "Fire For God"): strip
+  // the known singer names and any "feat." tail before keying.
+  let k = normAlbumKey(t.album);
+  if(!k) return "artist:" + normAlbumKey(t.artist);
+  k = k.replace(/\b(feat|ft)\b.*$/, " ");
+  (window.__mmaSingerKeys || []).forEach(n => { if(n) k = k.split(n).join(" "); });
+  return k.replace(/\s+/g, " ").trim() || normAlbumKey(t.album);
+}
 function groupAlbums(tracks){
   const map = new Map();
   tracks.forEach(t => {
-    const key = normAlbumKey(t.album) || ("artist:" + normAlbumKey(t.artist));
+    const key = albumGroupKey(t);
     let a = map.get(key);
     if(!a){ a = { title: t.album || "Untitled", artist: t.artist || "", cover: null, thumb: null, date: null, tracks: [], _tv: new Map(), _av: new Map() }; map.set(key, a); }
     if(t.album) a._tv.set(t.album, (a._tv.get(t.album) || 0) + 1);
@@ -839,6 +849,7 @@ async function bootLoad(){
 }
 
 /* ---------- Boot ---------- */
+window.__mmaSingerKeys = DEFAULT_SINGERS.concat(singers).map(n => normAlbumKey(n)).filter(Boolean);
 $("#pThumb").src = PLACEHOLDER;
 renderChips(); renderCats(); renderTabs(); renderHome();
 $("#list").innerHTML = `<div class="empty"><span class="spin"></span>Loading songs from the free libraries…</div>`;
