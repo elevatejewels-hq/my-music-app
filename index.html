@@ -278,6 +278,7 @@ let currentKey = null, shuffle = false, errStreak = 0;
 /* Home state: "home" shows the featured carousel + albums + the default
    list; "list" is the plain track list (search / singer / category / album). */
 let view = "home", activeCat = "all", listTitle = "Singles & Tracks", bootDone = false;
+let emptyNote = null; // category searches set an honest "not much here" note
 let homeTracks = [], homeAlbums = [], defaultTracks = [];
 const audio = $("#audio");
 
@@ -303,19 +304,42 @@ function visibleTracks(){
   return allTracks.filter(t => folderOf(t) === folder);
 }
 
-/* ---------- Albums: group a track set by (album, artist) ---------- */
+/* ---------- Albums: group a track set by normalized album title ----------
+   The same album often arrives under several artist strings (featured /
+   collaborator splits: "X", "X feat. Y", "X & Y") and with punctuation or
+   spacing differences in the title. Grouping by a NORMALIZED album key —
+   lowercase, punctuation stripped, spaces collapsed — merges those splits
+   into ONE album whose display artist is the most common variant. */
+function normAlbumKey(s){
+  return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
 function groupAlbums(tracks){
   const map = new Map();
   tracks.forEach(t => {
-    const key = JSON.stringify([t.album || "", t.artist || ""]);
+    const key = normAlbumKey(t.album) || ("artist:" + normAlbumKey(t.artist));
     let a = map.get(key);
-    if(!a){ a = { title: t.album || "Untitled", artist: t.artist || "", cover: null, thumb: null, date: null, tracks: [] }; map.set(key, a); }
+    if(!a){ a = { title: t.album || "Untitled", artist: t.artist || "", cover: null, thumb: null, date: null, tracks: [], _tv: new Map(), _av: new Map() }; map.set(key, a); }
+    if(t.album) a._tv.set(t.album, (a._tv.get(t.album) || 0) + 1);
+    if(t.artist) a._av.set(t.artist, (a._av.get(t.artist) || 0) + 1);
     if(!a.cover && t.cover) a.cover = t.cover;
     if(!a.thumb && t.artwork) a.thumb = t.artwork;
     if(t.date && (!a.date || String(t.date) > String(a.date))) a.date = t.date;
     a.tracks.push(t);
   });
-  return [...map.values()];
+  const albums = [...map.values()];
+  albums.forEach(a => {
+    // Display title/artist = the most common variant in the group; artist
+    // ties go to the fuller (longer) string.
+    const pick = (m, fuller) => {
+      let best = null, bestN = -1;
+      m.forEach((n, v) => { if(n > bestN || (fuller && n === bestN && best != null && v.length > best.length)){ best = v; bestN = n; } });
+      return best;
+    };
+    a.title = pick(a._tv, false) || a.title;
+    a.artist = pick(a._av, true) || a.artist;
+    delete a._tv; delete a._av;
+  });
+  return albums;
 }
 function byFreshness(a, b){
   return String(b.date || "").localeCompare(String(a.date || "")) || b.tracks.length - a.tracks.length;
@@ -342,8 +366,13 @@ function iaDuration(f){
   if(/:/.test(f.length)){ const p = f.length.split(":").map(Number); return p.reduce((a,b)=>a*60+b,0); }
   const n = parseFloat(f.length); return isFinite(n) ? n : null;
 }
-async function iaSearch(query){
-  const q = `(creator:(${query}) OR title:(${query}) OR subject:(${query})) AND mediatype:audio`;
+async function iaSearch(query, opts = {}){
+  // Category searches pass opts.core: subject-matching is what dragged in
+  // unrelated talks (a Chanukah subject hit is often a shiur, not a song),
+  // so categories match on creator/title only. Singer searches keep subject.
+  const q = opts.core
+    ? `(creator:(${query}) OR title:(${query})) AND mediatype:audio`
+    : `(creator:(${query}) OR title:(${query}) OR subject:(${query})) AND mediatype:audio`;
   const url = `${IA}/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier,title,creator&rows=10&page=1&output=json`;
   const r = await fetch(url); if(!r.ok) throw new Error("IA search " + r.status);
   const data = await r.json();
@@ -423,6 +452,47 @@ async function audiusSearch(query){
   }));
 }
 
+/* ---------- Relevance filters ----------
+   The free libraries match loosely; these filters only REMOVE what doesn't
+   belong — nothing is ever invented or relabelled. */
+// Home-shelf rule for Audius: its search matches loosely (any vaguely
+// similar artist comes back), so an Audius track may sit on the home
+// shelves only when its artist actually is the searched singer — the names
+// must contain each other, case-insensitive. IA tracks are the singers' own
+// items and always belong. Explicit typed searches are NOT filtered.
+function audiusMatchesSinger(t, singerName){
+  const a = String(t.artist || "").toLowerCase(), s = String(singerName || "").toLowerCase();
+  if(!a || !s) return false;
+  return a.includes(s) || s.includes(a);
+}
+// Browse-category terms: a track stays only if its title, artist or album
+// names the category (English variants + the Hebrew word).
+const CAT_TERMS = {
+  chanukah: ["chanukah", "chanuka", "hanukkah", "חנוכה"],
+  nigunim: ["nigun", "niggun", "nigunim", "ניגון", "ניגונים"]
+};
+function itemKeyOf(t){
+  // IA tracks carry their item identifier in the key; every Audius track
+  // is its own item.
+  if(t.source === "ia"){ const p = String(t.key || "").split(":"); return "ia:" + (p[1] || ""); }
+  return String(t.key || "");
+}
+function filterCategory(tracks, cat){
+  if(cat === "singles"){
+    // A single = a track whose item contributed exactly one track to the
+    // result set, or whose own title says "(Single)".
+    const counts = new Map();
+    tracks.forEach(t => { const k = itemKeyOf(t); counts.set(k, (counts.get(k) || 0) + 1); });
+    return tracks.filter(t => counts.get(itemKeyOf(t)) === 1 || t.title.toLowerCase().includes("single"));
+  }
+  const terms = CAT_TERMS[cat] || [];
+  if(!terms.length) return tracks.slice();
+  return tracks.filter(t => {
+    const x = (t.title + " " + t.artist + " " + (t.album || "")).toLowerCase();
+    return terms.some(term => x.includes(term));
+  });
+}
+
 /* ---------- Search ---------- */
 let searchSeq = 0;
 async function runSearch(query, opts = {}){
@@ -433,16 +503,24 @@ async function runSearch(query, opts = {}){
   const list = $("#list");
   list.innerHTML = `<div class="empty"><span class="spin"></span>Searching the free libraries for “${esc(query)}”…</div>`;
   let ia = [], au = [], errs = [];
-  const [ri, ra] = await Promise.allSettled([iaSearch(query), audiusSearch(query)]);
+  const [ri, ra] = await Promise.allSettled([iaSearch(query, { core: !!opts.cat }), audiusSearch(query)]);
   if(ri.status === "fulfilled") ia = ri.value; else errs.push("Internet Archive");
   if(ra.status === "fulfilled") au = ra.value; else errs.push("Audius");
   if(my !== searchSeq) return;
   const seen = new Set();
   allTracks = ia.concat(au).filter(t => !seen.has(t.key) && seen.add(t.key));
+  emptyNote = null;
+  if(opts.cat){
+    // Browse categories keep only what actually names the category; if the
+    // libraries hold nothing relevant, the list says so honestly instead
+    // of showing the loose matches.
+    allTracks = filterCategory(allTracks, opts.cat);
+    if(!allTracks.length) emptyNote = "The free libraries don't list much under " + (opts.catLabel || "this category") + " yet.<br>Try a singer above, or search for a song.";
+  }
   renderTabs(); renderList();
   window.__mmaReady = true; // first search settled & rendered — the intro may leave now
   if(errs.length) toast("Couldn't reach " + errs.join(" and ") + " — showing what loaded.");
-  if(!allTracks.length) toast("No playable tracks found for “" + query + "” in the free libraries.");
+  if(!allTracks.length && !opts.cat) toast("No playable tracks found for “" + query + "” in the free libraries.");
 }
 
 /* ---------- Rendering ---------- */
@@ -498,10 +576,11 @@ function renderHome(){
     return;
   }
   sec.style.display = "";
-  // Featured: albums with real art first, newest (by the item's own date) first.
+  // Featured: one card per (merged) album, preferring albums with a real
+  // cover file, then more tracks, then newest by the item's own date.
   let pool = homeAlbums.filter(a => a.cover || a.thumb);
   if(!pool.length) pool = homeAlbums.slice();
-  pool.sort(byFreshness);
+  pool.sort((a, b) => (b.cover ? 1 : 0) - (a.cover ? 1 : 0) || b.tracks.length - a.tracks.length || byFreshness(a, b));
   car.innerHTML = "";
   pool.slice(0, 8).forEach(a => {
     const card = document.createElement("div");
@@ -532,6 +611,7 @@ function renderHome(){
 }
 function showAlbum(a){
   activeCat = null; renderCats();
+  emptyNote = null;
   view = "list"; applyView();
   allTracks = a.tracks.slice(); folder = "all";
   listTitle = a.title; renderListTitle();
@@ -541,6 +621,7 @@ function showAlbum(a){
 function runCategory(id){
   if(id === "all"){
     activeCat = "all"; renderCats();
+    emptyNote = null;
     view = "home"; applyView();
     allTracks = defaultTracks.slice(); folder = "all";
     listTitle = "Singles & Tracks"; renderListTitle();
@@ -561,7 +642,7 @@ function runCategory(id){
     return;
   }
   const q = { chanukah: "Chanukah", nigunim: "nigun", singles: "single" }[id];
-  runSearch(q, { keepCat: true, title: label });
+  runSearch(q, { keepCat: true, title: label, cat: id, catLabel: label });
 }
 function renderTabs(){
   const t = $("#tabs"); t.innerHTML = "";
@@ -587,7 +668,7 @@ function renderList(){
     list.innerHTML = `<div class="empty">${folder === "bookmarks"
       ? "No bookmarks yet.<br>Tap the gold star on any song to save it here."
       : folder === "all"
-        ? "No tracks to show.<br>Try a search above, or tap a singer."
+        ? (emptyNote || "No tracks to show.<br>Try a search above, or tap a singer.")
         : "No tracks in this folder yet.<br>Folders fill only when the library lists a real tempo (BPM) for a song — most free-library songs don't list one, so they live in All Tracks."}</div>`;
     return;
   }
@@ -728,7 +809,10 @@ async function bootLoad(){
     const per = await Promise.all(names.map(async name => {
       const [ri, ra] = await Promise.allSettled([iaSearch(name), audiusSearch(name)]);
       const ia = ri.status === "fulfilled" ? ri.value : [];
-      const au = ra.status === "fulfilled" ? ra.value : [];
+      // Home shelves are strict: Audius matches loosely, so only Audius
+      // tracks whose artist really is this singer join the home data.
+      // (Typed searches stay unfiltered — the listener's choice.)
+      const au = (ra.status === "fulfilled" ? ra.value : []).filter(t => audiusMatchesSinger(t, name));
       const seen = new Set();
       return ia.concat(au).filter(t => !seen.has(t.key) && seen.add(t.key));
     }));

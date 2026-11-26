@@ -1,6 +1,6 @@
 /* My Music App service worker — caches the app shell so the UI opens offline.
    Music itself always streams live from the Internet Archive / Audius. */
-const CACHE = "mma-shell-v5";
+const CACHE = "mma-shell-v6";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./logo-header.png"];
 
 self.addEventListener("install", e => {
