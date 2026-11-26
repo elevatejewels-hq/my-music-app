@@ -116,9 +116,41 @@
   @keyframes rowIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
   .track{animation:rowIn .22s ease both}
   @media (prefers-reduced-motion:reduce){ .track{animation:none} button,.chip,.tab,.track,.play{transition:none} }
+
+  /* ---- Opening intro (owner spec): logo comes alive in a glass card ---- */
+  #intro{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,#0e5a63,#0b3f6e 45%,#123a7d 75%,#0e5a63);background-size:260% 260%;
+    animation:introBg 3.4s ease-in-out infinite;transition:opacity .55s ease,visibility .55s}
+  @keyframes introBg{0%{background-position:0% 40%}50%{background-position:100% 60%}100%{background-position:0% 40%}}
+  #intro.gone{opacity:0;visibility:hidden;pointer-events:none}
+  #intro .glass{position:relative;overflow:hidden;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.45);
+    backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);
+    border-radius:30px;padding:34px 40px;box-shadow:0 24px 70px rgba(2,20,45,.45);
+    animation:introCard 1s cubic-bezier(.2,.9,.25,1.2) both}
+  @keyframes introCard{0%{transform:scale(.8) translateY(26px);opacity:0}60%{transform:scale(1.03) translateY(-3px);opacity:1}100%{transform:scale(1) translateY(0)}}
+  #intro .glass img{width:min(66vw,430px);height:auto;display:block;border-radius:16px;
+    animation:introLogo 2.6s ease-in-out .35s both}
+  @keyframes introLogo{0%{transform:scale(.94)}30%{transform:scale(1.045) rotate(-.6deg)}55%{transform:scale(1) rotate(.4deg)}100%{transform:scale(1.015)}}
+  #intro .shine{position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.55) 48%,transparent 62%);
+    transform:translateX(-120%);animation:introShine 1.15s ease .55s 2}
+  @keyframes introShine{to{transform:translateX(120%)}}
+  #intro .note{position:absolute;color:rgba(255,255,255,.75);font-size:30px;animation:introNote 2.8s ease-in-out infinite;text-shadow:0 2px 12px rgba(0,0,0,.25)}
+  @keyframes introNote{0%,100%{transform:translateY(0) rotate(-6deg);opacity:.55}50%{transform:translateY(-16px) rotate(7deg);opacity:1}}
+  #intro .skip{position:absolute;bottom:calc(22px + env(safe-area-inset-bottom));left:0;right:0;text-align:center;
+    color:rgba(255,255,255,.85);font-size:14px;letter-spacing:.14em;text-transform:uppercase;animation:introNote 2.8s ease-in-out infinite}
+  @media (prefers-reduced-motion:reduce){ #intro,#intro .glass,#intro .glass img,#intro .shine{animation-duration:.01s} }
 </style>
 </head>
 <body>
+<div id="intro" role="button" aria-label="Enter My Music App">
+  <span class="note" style="top:16%;left:12%">♪</span>
+  <span class="note" style="top:24%;right:13%;animation-delay:.5s">♫</span>
+  <span class="note" style="bottom:20%;left:17%;animation-delay:1s">♩</span>
+  <span class="note" style="bottom:27%;right:18%;animation-delay:1.4s">♪</span>
+  <div class="glass"><img src="logo-header.png" alt="My Music App"><div class="shine"></div></div>
+  <div class="skip">Tap to enter</div>
+</div>
 <div class="wrap">
   <header><div class="logocard"><img src="logo-header.png" alt="My Music App"></div></header>
   <div class="srcnote">Free Jewish music, streamed live from the Internet Archive &amp; Audius — no account, no cost.</div>
@@ -489,6 +521,17 @@ $("#pThumb").src = PLACEHOLDER;
 renderChips(); renderTabs();
 runSearch("Avraham Fried");
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+</script>
+<script>
+/* ---------- Opening intro: alive for the first seconds, tap to enter ---------- */
+(() => {
+  const intro = document.getElementById("intro");
+  if(!intro) return;
+  const dismiss = () => intro.classList.add("gone");
+  intro.addEventListener("click", dismiss);
+  setTimeout(dismiss, 3400);
+  setTimeout(() => intro.remove(), 4200);
+})();
 </script>
 </body>
 </html>
