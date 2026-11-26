@@ -28,7 +28,9 @@
   body::before{content:"";position:fixed;inset:0;pointer-events:none;
     background:radial-gradient(60% 40% at 15% 0%,rgba(255,255,255,.35),transparent 60%),
                radial-gradient(50% 35% at 90% 20%,rgba(120,220,255,.18),transparent 60%);}
-  .wrap{max-width:860px;margin:0 auto;padding:18px 16px 190px;position:relative}
+  /* Bottom padding = floating player height (~185px) + comfortable margin,
+     so the last track row always clears the player; safe-area respected. */
+  .wrap{max-width:860px;margin:0 auto;padding:18px 16px calc(248px + env(safe-area-inset-bottom));position:relative}
   header{display:flex;align-items:center;justify-content:center;position:relative;padding:6px 0 14px}
   .logocard{background:rgba(255,255,255,.92);border-radius:20px;padding:10px 22px;box-shadow:0 6px 24px rgba(3,30,60,.25)}
   .logocard img{height:74px;width:auto;display:block}
@@ -285,21 +287,48 @@ async function iaSearch(query){
       if(!mr.ok) return;
       const md = await mr.json();
       const files = (md.files || []).filter(f => /\.(mp3|flac|ogg)$/i.test(f.name) && f.source !== "metadata");
-      const artist = (md.metadata && md.metadata.creator) || doc.creator || "Unknown artist";
-      const album = (md.metadata && md.metadata.title) || doc.title || doc.identifier;
+      const itemArtist = (md.metadata && md.metadata.creator) || doc.creator || null;
+      const album = String((md.metadata && md.metadata.title) || doc.title || doc.identifier);
       files.slice(0, 30).forEach(f => {
+        const duration = iaDuration(f);
+        // Non-songs: anything over 25 minutes is a podcast/lecture, not a track.
+        if(duration != null && duration > 25 * 60) return;
+        let title = iaFileTitle(f, album);
+        // A bare track number ("01") reads as "<album> · Track 01".
+        if(/^\d{1,3}$/.test(title)) title = album + " · Track " + title.padStart(2, "0");
+        // Track order inside the album: the file's own track field, else the
+        // leading number of its title/name, else the end of the album.
+        const tn = parseInt(f.track, 10);
+        const lead = /^(\d{1,3})\b/.exec(iaFileTitle(f, "") || f.name || "");
         tracks.push({
           key: "ia:" + doc.identifier + ":" + f.name,
           source: "ia", sourceLabel: "Internet Archive",
-          title: iaFileTitle(f, album), artist: String(artist), album: String(album),
-          duration: iaDuration(f), bpm: null,
+          title, artist: String(f.artist || f.creator || itemArtist || "Unknown artist"), album,
+          duration, bpm: null,
           artwork: `${IA}/services/img/${encodeURIComponent(doc.identifier)}`,
-          stream: `${IA}/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(f.name)}`
+          stream: `${IA}/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(f.name)}`,
+          _tn: isFinite(tn) ? tn : (lead ? parseInt(lead[1], 10) : Number.MAX_SAFE_INTEGER)
         });
       });
     }catch(e){ /* one bad item shouldn't sink the search */ }
   }));
-  return tracks;
+  // Dedupe: the same song often sits in several IA items — drop repeats by
+  // stream URL, or by same title + duration + album.
+  const seenUrl = new Set(), seenSig = new Set();
+  const clean = tracks.filter(t => {
+    const sig = t.title.toLowerCase() + "|" + (t.duration == null ? "" : Math.round(t.duration)) + "|" + t.album.toLowerCase();
+    if(seenUrl.has(t.stream) || seenSig.has(sig)) return false;
+    seenUrl.add(t.stream); seenSig.add(sig);
+    return true;
+  });
+  // Stable, deterministic order (items resolve in parallel, so arrival order
+  // reshuffles between loads): album, then track number, then title.
+  clean.sort((a, b) =>
+    a.album.toLowerCase().localeCompare(b.album.toLowerCase()) ||
+    (a._tn - b._tn) ||
+    a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+  clean.forEach(t => delete t._tn);
+  return clean;
 }
 
 /* ---------- Audius ---------- */
@@ -333,6 +362,7 @@ async function runSearch(query){
   const seen = new Set();
   allTracks = ia.concat(au).filter(t => !seen.has(t.key) && seen.add(t.key));
   renderTabs(); renderList();
+  window.__mmaReady = true; // first search settled & rendered — the intro may leave now
   if(errs.length) toast("Couldn't reach " + errs.join(" and ") + " — showing what loaded.");
   if(!allTracks.length) toast("No playable tracks found for “" + query + "” in the free libraries.");
 }
@@ -426,6 +456,11 @@ function playTrack(t, listForQueue){
   queue = (listForQueue || visibleTracks()).slice();
   currentKey = t.key; errStreak = 0;
   audio.src = t.stream;
+  // Show THIS track's times immediately — don't keep the previous track's
+  // total on screen while metadata loads (loadedmetadata refines it later).
+  $("#tot").textContent = fmt(t.duration);
+  $("#cur").textContent = "0:00";
+  $("#seek").value = 0;
   audio.play().catch(() => toast("Couldn't start playback — tap play to retry."));
   $("#pTitle").textContent = t.title;
   $("#pArtist").textContent = t.artist + (t.album ? " · " + t.album : "");
@@ -523,14 +558,26 @@ runSearch("Avraham Fried");
 if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 </script>
 <script>
-/* ---------- Opening intro: alive for the first seconds, tap to enter ---------- */
+/* ---------- Opening intro: stays until the app is ready, tap to enter ---------- */
 (() => {
   const intro = document.getElementById("intro");
   if(!intro) return;
-  const dismiss = () => intro.classList.add("gone");
+  const t0 = Date.now();
+  let gone = false;
+  const dismiss = () => {
+    if(gone) return; gone = true;
+    intro.classList.add("gone");
+    setTimeout(() => intro.remove(), 800); // after the .55s fade
+  };
   intro.addEventListener("click", dismiss);
-  setTimeout(dismiss, 3400);
-  setTimeout(() => intro.remove(), 4200);
+  // Leave only when BOTH: >=2.8s shown AND the first list has rendered.
+  // Hard cap: 7s no matter what (e.g. a hung search).
+  const tick = () => {
+    const elapsed = Date.now() - t0;
+    if((elapsed >= 2800 && window.__mmaReady) || elapsed >= 7000){ dismiss(); return; }
+    setTimeout(tick, 150);
+  };
+  tick();
 })();
 </script>
 </body>
