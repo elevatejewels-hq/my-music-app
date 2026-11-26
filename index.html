@@ -101,6 +101,21 @@
   .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;
     display:inline-block;animation:sp 0.8s linear infinite;vertical-align:-3px;margin-right:8px}
   @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---- Touch responsiveness (owner spec): native states, no sticking ---- */
+  *{-webkit-tap-highlight-color:transparent}
+  button,.chip,.tab,.track{touch-action:manipulation;user-select:none;-webkit-user-select:none}
+  button,.chip,.tab{transition:transform .13s ease,filter .13s ease,background .13s ease,box-shadow .13s ease}
+  button:active,.chip:active,.tab:active{transform:scale(.94);filter:brightness(1.18)}
+  .track{transition:transform .13s ease,background .13s ease}
+  .track:active{transform:scale(.985);background:rgba(255,255,255,.20)}
+  .play{transition:transform .13s ease,box-shadow .13s ease}
+  .play:active{transform:scale(.90)}
+  @media (hover:none){ button:hover,.chip:hover,.tab:hover,.track:hover{transform:none} }
+  button:focus-visible,.chip:focus-visible,.tab:focus-visible{outline:2px solid rgba(255,255,255,.85);outline-offset:2px}
+  @keyframes rowIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+  .track{animation:rowIn .22s ease both}
+  @media (prefers-reduced-motion:reduce){ .track{animation:none} button,.chip,.tab,.track,.play{transition:none} }
 </style>
 </head>
 <body>
@@ -426,9 +441,11 @@ audio.addEventListener("timeupdate", () => {
   }
 });
 $("#seek").addEventListener("input", e => { if(audio.duration) audio.currentTime = e.target.value / 1000 * audio.duration; });
+function setPlayIcon(playing){ $("#playIcon").innerHTML = playing ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>'; }
 $("#playBtn").addEventListener("click", () => {
   if(!currentKey){ const v = visibleTracks(); if(v.length) playTrack(v[0], v); return; }
-  if(audio.paused) audio.play(); else audio.pause();
+  if(audio.paused){ setPlayIcon(true); audio.play().catch(()=>setPlayIcon(false)); }
+  else { setPlayIcon(false); audio.pause(); }
 });
 $("#nextBtn").addEventListener("click", () => step(1));
 $("#prevBtn").addEventListener("click", () => step(-1));
