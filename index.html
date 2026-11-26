@@ -402,6 +402,11 @@ async function iaSearch(query, opts = {}){
       const files = (md.files || []).filter(f => /\.(mp3|flac|ogg)$/i.test(f.name) && f.source !== "metadata");
       const itemArtist = (md.metadata && md.metadata.creator) || doc.creator || null;
       const album = String((md.metadata && md.metadata.title) || doc.title || doc.identifier);
+      // Artist hint: when a singer search produced this item and the item's
+      // own title names that singer, he is the artist — the libraries often
+      // leave the creator field blank on his albums ("Unknown artist").
+      const hintArtist = (!itemArtist && opts.artistHint && album.toLowerCase().includes(String(opts.artistHint).toLowerCase()))
+        ? String(opts.artistHint) : null;
       files.slice(0, 30).forEach(f => {
         const duration = iaDuration(f);
         // Non-songs: anything over 25 minutes is a podcast/lecture, not a track.
@@ -416,7 +421,7 @@ async function iaSearch(query, opts = {}){
         tracks.push({
           key: "ia:" + doc.identifier + ":" + f.name,
           source: "ia", sourceLabel: "Internet Archive",
-          title, artist: String(f.artist || f.creator || itemArtist || "Unknown artist"), album,
+          title, artist: String(f.artist || f.creator || itemArtist || hintArtist || "Unknown artist"), album,
           duration, bpm: null, cover: itemCover, date: itemDate,
           artwork: `${IA}/services/img/${encodeURIComponent(doc.identifier)}`,
           stream: `${IA}/download/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(f.name)}`,
@@ -519,7 +524,8 @@ async function runSearch(query, opts = {}){
   const list = $("#list");
   list.innerHTML = `<div class="empty"><span class="spin"></span>Searching the free libraries for “${esc(query)}”…</div>`;
   let ia = [], au = [], errs = [];
-  const [ri, ra] = await Promise.allSettled([iaSearch(query, { core: !!opts.cat }), audiusSearch(query)]);
+  const singerHint = singers.find(x => x.toLowerCase() === String(query).toLowerCase()) || null;
+  const [ri, ra] = await Promise.allSettled([iaSearch(query, { core: !!opts.cat, artistHint: singerHint || undefined }), audiusSearch(query)]);
   if(ri.status === "fulfilled") ia = ri.value; else errs.push("Internet Archive");
   if(ra.status === "fulfilled") au = ra.value; else errs.push("Audius");
   if(my !== searchSeq) return;
@@ -823,7 +829,7 @@ async function bootLoad(){
   const names = (singers.length ? singers : DEFAULT_SINGERS).slice();
   try{
     const per = await Promise.all(names.map(async name => {
-      const [ri, ra] = await Promise.allSettled([iaSearch(name), audiusSearch(name)]);
+      const [ri, ra] = await Promise.allSettled([iaSearch(name, { artistHint: name }), audiusSearch(name)]);
       const ia = ri.status === "fulfilled" ? ri.value : [];
       // Home shelves are strict: Audius matches loosely, so only Audius
       // tracks whose artist really is this singer join the home data.
