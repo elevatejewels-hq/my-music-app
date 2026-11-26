@@ -1,0 +1,31 @@
+{
+ "background_color": "#081f42",
+ "description": "Stream Jewish music free, live from the Internet Archive and Audius.",
+ "display": "standalone",
+ "icons": [
+  {
+   "src": "icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ],
+ "name": "My Music App \u2014 Jewish Music",
+ "orientation": "portrait",
+ "scope": "./",
+ "short_name": "My Music App",
+ "start_url": "./index.html",
+ "theme_color": "#0e5a63"
+}
