@@ -346,7 +346,8 @@ function groupAlbums(tracks){
       return best;
     };
     a.title = pick(a._tv, false) || a.title;
-    a.artist = pick(a._av, true) || a.artist;
+    const realArtists = new Map([...a._av].filter(([v]) => v && v.toLowerCase() !== "unknown artist"));
+    a.artist = pick(realArtists.size ? realArtists : a._av, true) || a.artist;
     delete a._tv; delete a._av;
   });
   return albums;
@@ -493,13 +494,18 @@ function filterCategory(tracks, cat){
     // result set, or whose own title says "(Single)".
     const counts = new Map();
     tracks.forEach(t => { const k = itemKeyOf(t); counts.set(k, (counts.get(k) || 0) + 1); });
-    return tracks.filter(t => counts.get(itemKeyOf(t)) === 1 || t.title.toLowerCase().includes("single"));
+    const SPOKEN = /podcast|episode|\btalks?\b|shiur|lecture|sermon|halacha/;
+    return tracks.filter(t => (counts.get(itemKeyOf(t)) === 1 || t.title.toLowerCase().includes("single"))
+      && !SPOKEN.test((t.title + " " + t.artist + " " + (t.album || "")).toLowerCase()));
   }
   const terms = CAT_TERMS[cat] || [];
   if(!terms.length) return tracks.slice();
+  // The category chips promise songs: spoken-word items (podcasts, talks,
+  // shiurim) that merely mention the topic don't belong here.
+  const SPOKEN = /podcast|episode|\btalks?\b|shiur|lecture|sermon|halacha/;
   return tracks.filter(t => {
     const x = (t.title + " " + t.artist + " " + (t.album || "")).toLowerCase();
-    return terms.some(term => x.includes(term));
+    return terms.some(term => x.includes(term)) && !SPOKEN.test(x);
   });
 }
 
